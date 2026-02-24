@@ -7,6 +7,10 @@ public class SimManager : MonoBehaviour
     public WorldGrid grid;
     public AgentPuppet puppetPrefab;
 
+    [Header("Hierarchy")]
+    public Transform puppetsRoot;
+    public Transform basesRoot;
+
     [Header("Population")]
     public int agentCount = 60;
 
@@ -19,6 +23,11 @@ public class SimManager : MonoBehaviour
     public float minSpeed = 3.0f;
     public float maxSpeed = 4.5f;
 
+    [Header("Gathering")]
+    public int carryCapacity = 5;
+    public float harvestInterval = 0.6f;
+    public int searchRadius = 25;
+
     [Header("Avoidance")]
     public float avoidRadius = 1.2f;
     public float avoidStrength = 2.0f;
@@ -29,6 +38,8 @@ public class SimManager : MonoBehaviour
     void Start()
     {
         if (!grid) grid = FindFirstObjectByType<WorldGrid>();
+        if (!puppetsRoot) puppetsRoot = new GameObject("_Puppets").transform;
+        if (!basesRoot) basesRoot = new GameObject("_Bases").transform;
 
         BuildFactions();
         SpawnAgents();
@@ -59,9 +70,9 @@ public class SimManager : MonoBehaviour
 
             factions.Add(f);
 
-            // base marker
             var marker = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-            marker.name = $"Base_{i}";
+            marker.name = $"Base_{i:00}";
+            marker.transform.SetParent(basesRoot, worldPositionStays: true);
             marker.transform.position = basePos + Vector3.up * 0.5f;
             marker.transform.localScale = new Vector3(1.2f, 1f, 1.2f);
             marker.GetComponent<Renderer>().material.color = f.color;
@@ -92,11 +103,17 @@ public class SimManager : MonoBehaviour
                     pos = spawnPos,
                     target = spawnPos,
                     speed = Random.Range(minSpeed, maxSpeed),
+                    state = AgentState.Idle,
+                    carryFood = 0,
+                    harvestTimer = 0f,
+                    berryX = -1,
+                    berryZ = -1,
                 };
 
                 agents.Add(a);
 
-                var p = Instantiate(puppetPrefab, spawnPos, Quaternion.identity);
+                var p = Instantiate(puppetPrefab, spawnPos, Quaternion.identity, puppetsRoot);
+                p.name = $"A_{a.id:000}_F{a.factionId}";
                 p.Init(a.id, f.color);
 
                 f.population++;
@@ -111,32 +128,113 @@ public class SimManager : MonoBehaviour
     {
         float dt = Time.deltaTime;
 
-        // Update each agent
         for (int i = 0; i < agents.Count; i++)
         {
             var a = agents[i];
 
-            // If reached target, pick a new one
-            if ((a.pos - a.target).sqrMagnitude < 0.1f)
+            // Get agent current cell for searching/harvesting
+            WorldToCell(a.pos, out int ax, out int az);
+
+            switch (a.state)
             {
-                int rx = Random.Range(0, grid.width);
-                int rz = Random.Range(0, grid.height);
-                a.target = grid.CellToWorld(rx, rz);
+                case AgentState.Idle:
+                {
+                    // find berry
+                    if (TryFindNearestBerryCell(ax, az, searchRadius, out int bx, out int bz))
+                    {
+                        a.berryX = bx;
+                        a.berryZ = bz;
+                        a.target = grid.CellToWorld(bx, bz);
+                        a.state = AgentState.GoToBerry;
+                    }
+                    else
+                    {
+                        // fallback: wander a bit so they don't look frozen if berries are far
+                        if ((a.pos - a.target).sqrMagnitude < 0.5f)
+                        {
+                            int rx = Random.Range(0, grid.width);
+                            int rz = Random.Range(0, grid.height);
+                            a.target = grid.CellToWorld(rx, rz);
+                        }
+                    }
+                    break;
+                }
+
+                case AgentState.GoToBerry:
+                {
+                    // if berry depleted en route, re-plan
+                    if (!grid.IsBerry(a.berryX, a.berryZ))
+                    {
+                        a.state = AgentState.Idle;
+                        break;
+                    }
+
+                    if ((a.pos - a.target).sqrMagnitude < 0.25f)
+                    {
+                        a.state = AgentState.HarvestBerry;
+                        a.harvestTimer = 0f;
+                    }
+                    break;
+                }
+
+                case AgentState.HarvestBerry:
+                {
+                    // must be on/near berry cell
+                    a.harvestTimer += dt;
+
+                    if (a.harvestTimer >= harvestInterval)
+                    {
+                        a.harvestTimer = 0f;
+
+                        // consume 1 berry from tile
+                        if (grid.TryConsumeBerry(a.berryX, a.berryZ, 1))
+                        {
+                            a.carryFood += 1;
+
+                            if (a.carryFood >= carryCapacity)
+                            {
+                                // go home
+                                var f = factions[a.factionId];
+                                a.target = f.basePos;
+                                a.state = AgentState.ReturnToBase;
+                            }
+                        }
+                        else
+                        {
+                            // depleted
+                            a.state = AgentState.Idle;
+                        }
+                    }
+                    break;
+                }
+
+                case AgentState.ReturnToBase:
+                {
+                    if ((a.pos - a.target).sqrMagnitude < 0.35f)
+                    {
+                        // deposit
+                        var f = factions[a.factionId];
+                        f.food += a.carryFood;
+                        a.carryFood = 0;
+                        a.state = AgentState.Idle;
+                        factions[a.factionId] = f; // write back
+                    }
+                    break;
+                }
             }
 
+            // movement (same for all states)
             Vector3 desired = (a.target - a.pos);
             desired.y = 0f;
 
-            // Avoidance force
             Vector3 avoid = ComputeAvoidance(i);
+            Vector3 dir = desired.sqrMagnitude > 0.0001f ? desired.normalized : Vector3.zero;
+            dir = (dir + avoid * avoidStrength);
 
-            // Combine
-            Vector3 dir = desired.normalized + avoid * avoidStrength;
             if (dir.sqrMagnitude > 0.0001f) dir.Normalize();
-
             a.pos += dir * a.speed * dt;
 
-            agents[i] = a; // write back
+            agents[i] = a;
         }
     }
 
@@ -171,7 +269,46 @@ public class SimManager : MonoBehaviour
         if (count == 0) return Vector3.zero;
         return push / count;
     }
+
+    bool WorldToCell(Vector3 world, out int cx, out int cz)
+    {
+        grid.WorldToCell(world, out cx, out cz);
+        return true;
+    }
+
+    bool TryFindNearestBerryCell(int fromX, int fromZ, int radius, out int outX, out int outZ)
+    {
+        outX = fromX; outZ = fromZ;
+        int bestDist = int.MaxValue;
+        bool found = false;
+
+        for (int r = 1; r <= radius; r++)
+        {
+            for (int dz = -r; dz <= r; dz++)
+            for (int dx = -r; dx <= r; dx++)
+            {
+                int x = fromX + dx;
+                int z = fromZ + dz;
+                if (x < 0 || z < 0 || x >= grid.width || z >= grid.height) continue;
+
+                if (!grid.IsBerry(x, z)) continue;
+
+                int dist = Mathf.Abs(dx) + Mathf.Abs(dz);
+                if (dist < bestDist)
+                {
+                    bestDist = dist;
+                    outX = x; outZ = z;
+                    found = true;
+                }
+            }
+            if (found) break;
+        }
+
+        return found;
+    }
 }
+
+public enum AgentState { Idle, GoToBerry, HarvestBerry, ReturnToBase }
 
 public struct AgentData
 {
@@ -181,4 +318,12 @@ public struct AgentData
     public Vector3 pos;
     public Vector3 target;
     public float speed;
+
+    public AgentState state;
+
+    public int carryFood;
+    public float harvestTimer;
+
+    // berry target in grid coords (so we don’t lose it)
+    public int berryX, berryZ;
 }

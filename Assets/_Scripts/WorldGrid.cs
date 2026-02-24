@@ -69,6 +69,20 @@ public class WorldGrid : MonoBehaviour
     float halfH = height * cellSize * 0.5f;
     return transform.position + new Vector3((x + 0.5f) * cellSize - halfW, 0f, (z + 0.5f) * cellSize - halfH);
 }
+
+    public void WorldToCell(Vector3 world, out int x, out int z)
+    {
+        float halfW = width * cellSize * 0.5f;
+        float halfH = height * cellSize * 0.5f;
+
+        Vector3 local = world - transform.position;
+        x = Mathf.FloorToInt((local.x + halfW) / cellSize);
+        z = Mathf.FloorToInt((local.z + halfH) / cellSize);
+
+        x = Mathf.Clamp(x, 0, width - 1);
+        z = Mathf.Clamp(z, 0, height - 1);
+    }
+
     public void ForceResourcePatch(int centerX, int centerZ, int radius, ResourceType type, int amountPerTile)
 {
     for (int dz = -radius; dz <= radius; dz++)
@@ -88,6 +102,23 @@ public class WorldGrid : MonoBehaviour
         tiles[idx] = t;
     }
 }
+
+    public bool IsBerry(int x, int z)
+    {
+        var t = tiles[Index(x, z)];
+        return t.res == ResourceType.Berry && t.amount > 0;
+    }
+
+    public bool TryConsumeBerry(int x, int z, int amount)
+    {
+        int idx = Index(x, z);
+        var t = tiles[idx];
+        if (t.res != ResourceType.Berry || t.amount <= 0) return false;
+
+        t.amount = Mathf.Max(0, t.amount - amount);
+        tiles[idx] = t;
+        return true;
+    }
 
     void OnDrawGizmos()
     {
