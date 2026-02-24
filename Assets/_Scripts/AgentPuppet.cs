@@ -22,8 +22,8 @@ public class AgentPuppet : MonoBehaviour
         var sim = FindFirstObjectByType<SimManager>();
         if (!sim) return;
         if (agentId < 0 || agentId >= sim.agents.Count) return;
-
         Vector3 target = sim.agents[agentId].pos;
+        target.y += 1.0f;
         transform.position = Vector3.Lerp(transform.position, target, 15f * Time.deltaTime);
     }
 }

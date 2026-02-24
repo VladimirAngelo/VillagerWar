@@ -10,6 +10,11 @@ public class SimManager : MonoBehaviour
     [Header("Population")]
     public int agentCount = 60;
 
+    [Header("Factions")]
+    public int factionCount = 4;
+    public float factionRingRadius = 25f;
+    public List<FactionData> factions = new();
+
     [Header("Movement")]
     public float minSpeed = 3.0f;
     public float maxSpeed = 4.5f;
@@ -25,31 +30,81 @@ public class SimManager : MonoBehaviour
     {
         if (!grid) grid = FindFirstObjectByType<WorldGrid>();
 
-        agents.Clear();
+        BuildFactions();
+        SpawnAgents();
 
-        for (int i = 0; i < agentCount; i++)
+        Debug.Log($"Factions: {factions.Count} | Agents: {agents.Count}");
+    }
+
+    void BuildFactions()
+    {
+        factions.Clear();
+
+        Vector3 center = grid.CellToWorld(grid.width / 2, grid.height / 2);
+
+        for (int i = 0; i < factionCount; i++)
         {
-            int x = grid.width / 2 + Random.Range(-6, 7);
-            int z = grid.height / 2 + Random.Range(-6, 7);
+            float a = (i / (float)factionCount) * Mathf.PI * 2f;
+            Vector3 basePos = center + new Vector3(Mathf.Cos(a), 0f, Mathf.Sin(a)) * factionRingRadius;
 
-            Vector3 spawnPos = grid.CellToWorld(x, z);
-
-            var a = new AgentData
+            var f = new FactionData
             {
                 id = i,
-                factionId = 0, // step 2 will set this
-                pos = spawnPos,
-                target = spawnPos,
-                speed = Random.Range(minSpeed, maxSpeed),
+                color = Color.HSVToRGB(i / (float)factionCount, 0.8f, 0.9f),
+                basePos = basePos,
+                food = 0,
+                wood = 0,
+                population = 0
             };
 
-            agents.Add(a);
+            factions.Add(f);
 
-            var p = Instantiate(puppetPrefab, spawnPos, Quaternion.identity);
-            p.Init(i, Color.white);
+            // base marker
+            var marker = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            marker.name = $"Base_{i}";
+            marker.transform.position = basePos + Vector3.up * 0.5f;
+            marker.transform.localScale = new Vector3(1.2f, 1f, 1.2f);
+            marker.GetComponent<Renderer>().material.color = f.color;
+            Destroy(marker.GetComponent<Collider>());
         }
+    }
 
-        Debug.Log($"Spawned agents: {agents.Count}");
+    void SpawnAgents()
+    {
+        agents.Clear();
+
+        // even-ish split
+        int perFaction = Mathf.Max(1, agentCount / Mathf.Max(1, factionCount));
+        int spawned = 0;
+
+        for (int fi = 0; fi < factions.Count; fi++)
+        {
+            var f = factions[fi];
+
+            for (int n = 0; n < perFaction && spawned < agentCount; n++)
+            {
+                Vector3 spawnPos = f.basePos + new Vector3(Random.Range(-3f, 3f), 0f, Random.Range(-3f, 3f));
+
+                var a = new AgentData
+                {
+                    id = spawned,
+                    factionId = f.id,
+                    pos = spawnPos,
+                    target = spawnPos,
+                    speed = Random.Range(minSpeed, maxSpeed),
+                };
+
+                agents.Add(a);
+
+                var p = Instantiate(puppetPrefab, spawnPos, Quaternion.identity);
+                p.Init(a.id, f.color);
+
+                f.population++;
+                spawned++;
+            }
+
+            factions[fi] = f; // write back updates to population
+        }
     }
 
     void Update()
