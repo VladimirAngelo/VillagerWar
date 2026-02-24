@@ -15,18 +15,20 @@ public class CameraFollow : MonoBehaviour
 
     void Start()
     {
-        Cursor.lockState = CursorLockMode.Locked;
-        Cursor.visible = false;
     }
 
     void LateUpdate()
     {
         if (!target) return;
 
-        // Mouse input
-        yaw += Input.GetAxis("Mouse X") * mouseSensitivity * 100f * Time.deltaTime;
-        pitch -= Input.GetAxis("Mouse Y") * mouseSensitivity * 100f * Time.deltaTime;
-        pitch = Mathf.Clamp(pitch, minY, maxY);
+        // Only rotate camera while gameplay cursor lock is active.
+        if (Cursor.lockState == CursorLockMode.Locked && !Cursor.visible)
+        {
+            float lookDt = Time.unscaledDeltaTime;
+            yaw += Input.GetAxis("Mouse X") * mouseSensitivity * 100f * lookDt;
+            pitch -= Input.GetAxis("Mouse Y") * mouseSensitivity * 100f * lookDt;
+            pitch = Mathf.Clamp(pitch, minY, maxY);
+        }
 
         // Rotation
         Quaternion rotation = Quaternion.Euler(pitch, yaw, 0);
